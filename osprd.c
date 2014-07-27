@@ -61,7 +61,8 @@ typedef struct osprd_info {
 
 	wait_queue_head_t blockq;       // Wait queue for tasks blocked on
 					// the device lock
-
+	unsigned read_lock;		// Number of read-locks held
+	unsigned write_lock;		// Determines write-lock held
 	/* HINT: You may want to add additional fields to help
 	         in detecting deadlock. */
 
@@ -108,8 +109,8 @@ static void for_each_open_file(struct task_struct *task,
 static void osprd_process_request(osprd_info_t *d, struct request *req)
 {
 	// My declarations
-	unsigned long *blk;
-	unsigned long blk_size;
+	unsigned long *blk;	// Offset
+	unsigned long blk_size;	// Size
 
 	if (!blk_fs_request(req)) {
 		end_request(req, 0);
@@ -124,15 +125,10 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
 	// 'req->buffer' members, and the rq_data_dir() function.
 
 	// Your code here.
-	//eprintk("Should process request...\n");
 	blk = (d->data)+(req->sector)*SECTOR_SIZE;
 	blk_size = (req->current_nr_sectors)*SECTOR_SIZE;
 	
 	if (rq_data_dir(req) == READ)	{	//READ request
-		/* eprintk("Block num = %d\n", req->sector);
-		eprintk("Block size = %d\n", req->current_nr_sectors);
-		eprintk("Base data addr = %u\n", d->data);
-		eprintk("Base block addr = %u\n", blk); */
 		memcpy(req->buffer, blk, blk_size);
 	}
 	else {	//WRITE request
@@ -239,7 +235,34 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to acquire\n");
-		r = -ENOTTY;
+		
+		if (filp_writable) {
+			// Attempt to write-lock the ramdisk
+			if (!(d->write_lock || d->read_lock)) {	
+				// If no read or write-locks are held
+				osp_spin_lock(&d->mutex);
+				filp->f_flags |= F_OSPRD_LOCKED;
+				d->write_lock = 1;
+			}
+			else {
+				// Add entry to wait queue
+				eprintk("Write lock blocked\n");
+			}
+		}
+		else {	
+			// Attempt to read-lock the ramdisk
+			if (!d->write_lock) {
+				// If no write-locks are held
+				osp_spin_lock(&d->mutex);
+				filp->f_flags |= F_OSPRD_LOCKED;
+				d->read_lock++;
+			}
+			else {
+				// Add entry to wait queue
+				eprintk("Read lock blocked\n");
+			}
+		}
+		//r = -ENOTTY;
 
 	} else if (cmd == OSPRDIOCTRYACQUIRE) {
 
@@ -249,7 +272,6 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// block.  If OSPRDIOCACQUIRE would block or return deadlock,
 		// OSPRDIOCTRYACQUIRE should return -EBUSY.
 		// Otherwise, if we can grant the lock request, return 0.
-
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to try acquire\n");
 		r = -ENOTTY;
@@ -264,7 +286,21 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// you need, and return 0.
 
 		// Your code here (instead of the next line).
-		r = -ENOTTY;
+		// The file hasn't locked the ramdisk
+		if (!(filp->f_flags &=  F_OSPRD_LOCKED))
+			return -EINVAL;
+		
+		filp->f_flags = 0;
+		osp_spin_unlock(&d->mutex);
+
+		if (filp_writable) {
+			d->write_lock--;
+		}
+		else {
+			d->read_lock--;
+		}
+		
+		//r = -ENOTTY;
 
 	} else
 		r = -ENOTTY; /* unknown command */
