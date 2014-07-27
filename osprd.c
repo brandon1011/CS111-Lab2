@@ -241,7 +241,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		
 		if (d->write_lock || (filp_writable && d->read_lock)) {
 			eprintk("Cannot acquire lock\n");
-			wait_event_interruptible(d->blockq, d->ticket_tail==local_ticket);
+			//wait_event_interruptible(d->blockq, d->ticket_tail==local_ticket);
 			r = -ERESTARTSYS;
 		}
 		else {
@@ -260,7 +260,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// OSPRDIOCTRYACQUIRE should return -EBUSY.
 		// Otherwise, if we can grant the lock request, return 0.
 		// Your code here (instead of the next two lines).
-		eprintk("Attempting to try acquire\n");
+		eprintk("Attempting to try acquire again\n");
 		r = -ENOTTY;
 
 	} else if (cmd == OSPRDIOCRELEASE) {
@@ -283,7 +283,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			osp_spin_lock(&d->mutex);
 			filp->f_flags &= ~F_OSPRD_LOCKED;
 			(filp_writable) ? --d->write_lock : --d->read_lock;
-			wake_up_interruptible(d->blockq);
+			//wake_up_interruptible(&d->blockq);
 			osp_spin_unlock(&d->mutex);
 		}
 	} else
