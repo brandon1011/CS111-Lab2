@@ -34,7 +34,7 @@
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_DESCRIPTION("CS 111 RAM Disk");
 // EXERCISE: Pass your names into the kernel as the module's authors.
-MODULE_AUTHOR("Skeletor");
+MODULE_AUTHOR("Kevin Luc & Brandon Wu");
 
 #define OSPRD_MAJOR	222
 
@@ -108,8 +108,8 @@ static void for_each_open_file(struct task_struct *task,
 static void osprd_process_request(osprd_info_t *d, struct request *req)
 {
 	// My declarations
-	uint8_t *blk;
-	uint8_t blk_size;
+	unsigned long *blk;
+	unsigned long blk_size;
 
 	if (!blk_fs_request(req)) {
 		end_request(req, 0);
@@ -126,9 +126,13 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
 	// Your code here.
 	//eprintk("Should process request...\n");
 	blk = (d->data)+(req->sector)*SECTOR_SIZE;
-	blk_size = req->current_nr_sectors*SECTOR_SIZE;
+	blk_size = (req->current_nr_sectors)*SECTOR_SIZE;
 	
 	if (rq_data_dir(req) == READ)	{	//READ request
+		/* eprintk("Block num = %d\n", req->sector);
+		eprintk("Block size = %d\n", req->current_nr_sectors);
+		eprintk("Base data addr = %u\n", d->data);
+		eprintk("Base block addr = %u\n", blk); */
 		memcpy(req->buffer, blk, blk_size);
 	}
 	else {	//WRITE request
