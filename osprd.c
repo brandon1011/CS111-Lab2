@@ -238,13 +238,13 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		
 		if (d->write_lock || (filp_writable && d->read_lock)) {
 			eprintk("Cannot acquire lock\n");
+			//r = -ENOTTY;
 		}
 		else {
 			osp_spin_lock(&d->mutex);
 			filp->f_flags |= F_OSPRD_LOCKED;
 			(filp_writable) ? d->write_lock=1 : ++d->read_lock;
 		}
-		//r = -ENOTTY;
 
 	} else if (cmd == OSPRDIOCTRYACQUIRE) {
 
@@ -262,6 +262,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// EXERCISE: Unlock the ramdisk.
 		//
+
 		// If the file hasn't locked the ramdisk, return -EINVAL.
 		// Otherwise, clear the lock from filp->f_flags, wake up
 		// the wait queue, perform any additional accounting steps
@@ -269,21 +270,15 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next line).
 		// The file hasn't locked the ramdisk
-		if (!(filp->f_flags &=  F_OSPRD_LOCKED))
-			return -EINVAL;
-		
-		filp->f_flags = 0;
-		osp_spin_unlock(&d->mutex);
-
-		if (filp_writable) {
-			d->write_lock--;
+		if (!(filp->f_flags &=  F_OSPRD_LOCKED)) {
+			r = -EINVAL;
 		}
 		else {
-			d->read_lock--;
+			// Unlock the R/W lock
+			filp->f_flags = 0;
+			osp_spin_unlock(&d->mutex);
+			(filp_writable) ? --d->write_lock : --d->read_lock;
 		}
-		
-		//r = -ENOTTY;
-
 	} else
 		r = -ENOTTY; /* unknown command */
 	return r;
