@@ -236,31 +236,13 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to acquire\n");
 		
-		if (filp_writable) {
-			// Attempt to write-lock the ramdisk
-			if (!(d->write_lock || d->read_lock)) {	
-				// If no read or write-locks are held
-				osp_spin_lock(&d->mutex);
-				filp->f_flags |= F_OSPRD_LOCKED;
-				d->write_lock = 1;
-			}
-			else {
-				// Add entry to wait queue
-				eprintk("Write lock blocked\n");
-			}
+		if (d->write_lock || (filp_writable && d->read_lock)) {
+			eprintk("Cannot acquire lock\n");
 		}
-		else {	
-			// Attempt to read-lock the ramdisk
-			if (!d->write_lock) {
-				// If no write-locks are held
-				osp_spin_lock(&d->mutex);
-				filp->f_flags |= F_OSPRD_LOCKED;
-				d->read_lock++;
-			}
-			else {
-				// Add entry to wait queue
-				eprintk("Read lock blocked\n");
-			}
+		else {
+			osp_spin_lock(&d->mutex);
+			filp->f_flags |= F_OSPRD_LOCKED;
+			(filp_writable) ? d->write_lock=1 : ++d->read_lock;
 		}
 		//r = -ENOTTY;
 
