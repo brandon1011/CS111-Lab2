@@ -235,15 +235,20 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to acquire\n");
+		unsigned local_ticket;
+		local_ticket = d->ticket_head;
+		d->ticket_head++;
 		
 		if (d->write_lock || (filp_writable && d->read_lock)) {
 			eprintk("Cannot acquire lock\n");
-			//r = -ENOTTY;
+			wait_event_interruptible(d->blockq, d->ticket_tail==local_ticket);
+			r = -ERESTARTSYS;
 		}
 		else {
 			osp_spin_lock(&d->mutex);
 			filp->f_flags |= F_OSPRD_LOCKED;
 			(filp_writable) ? d->write_lock=1 : ++d->read_lock;
+			osp_spin_unlock(&d->mutex);
 		}
 
 	} else if (cmd == OSPRDIOCTRYACQUIRE) {
@@ -275,9 +280,11 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		}
 		else {
 			// Unlock the R/W lock
-			filp->f_flags = 0;
-			osp_spin_unlock(&d->mutex);
+			osp_spin_lock(&d->mutex);
+			filp->f_flags &= ~F_OSPRD_LOCKED;
 			(filp_writable) ? --d->write_lock : --d->read_lock;
+			wake_up_interruptible(d->blockq);
+			osp_spin_unlock(&d->mutex);
 		}
 	} else
 		r = -ENOTTY; /* unknown command */
