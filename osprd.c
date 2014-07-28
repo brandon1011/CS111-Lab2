@@ -127,7 +127,7 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
 	// Your code here.
 	blk = (d->data)+(req->sector)*SECTOR_SIZE;
 	blk_size = (req->current_nr_sectors)*SECTOR_SIZE;
-	
+
 	if (rq_data_dir(req) == READ)	{	//READ request
 		memcpy(req->buffer, blk, blk_size);
 	}
@@ -162,7 +162,17 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 		// EXERCISE: If the user closes a ramdisk file that holds
 		// a lock, release the lock.  Also wake up blocked processes
 		// as appropriate.
-
+		if(filp->f_flags & F_OSPRD_LOCKED) {
+		  osp_spin_lock(&(d->mutex));
+		  filp->f_flags &= ~F_OSPRD_LOCKED;
+		  if (filp_writable)
+		    d->write_lock = 0;
+		  else
+		    d->read_lock--;
+		  osp_spin_unlock(&(d->mutex));
+		  wake_up_all(&d->blockq);
+		}
+		 
 		// Your code here.
 
 		// This line avoids compiler warnings; you may remove it.
@@ -235,23 +245,29 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to acquire\n");
+		osp_spin_lock(&d->mutex);
 		unsigned local_ticket = d->ticket_head;
 		d->ticket_head++;
-		
-		if (d->write_lock || (filp_writable && d->read_lock)) {
-			eprintk("Cannot acquire lock\n");
+		osp_spin_unlock(&d->mutex);
+
+		wait_event_interruptible(d->blockq, d->ticket_tail==local_ticket);
+		if (filp_writable)
+		  wait_event_interruptible(d->blockq, (!d->write_lock && !d->read_lock));
+		else
+			wait_event_interruptible(d->blockq, (!d->write_lock));
+		  //eprintk("Cannot acquire lock\n");
 			/*
 			wait_event_interruptible(d->blockq, d->ticket_tail==local_ticket);
 			r = -ERESTARTSYS;
 			// NOTE: Need to uncomment these lines but fix wait forever
 			*/
-		}
-		else {
-			osp_spin_lock(&d->mutex);
-			filp->f_flags |= F_OSPRD_LOCKED;
-			(filp_writable) ? d->write_lock=1 : ++d->read_lock;
-			osp_spin_unlock(&d->mutex);
-		}
+		osp_spin_lock(&d->mutex);
+		filp->f_flags |= F_OSPRD_LOCKED;
+		(filp_writable) ? d->write_lock=1 : ++d->read_lock;
+		d->ticket_tail++;
+		osp_spin_unlock(&d->mutex);
+		wake_up_all(&d->blockq);
+		eprintk("Success!\n");
 
 	} else if (cmd == OSPRDIOCTRYACQUIRE) {
 
@@ -262,6 +278,13 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// OSPRDIOCTRYACQUIRE should return -EBUSY.
 		// Otherwise, if we can grant the lock request, return 0.
 		// Your code here (instead of the next two lines).
+	  /*
+		osp_spin_lock(&d->mutex);
+		filp->f_flags |= F_OSPRD_LOCKED;
+		(filp_writable) ? d->write_lock=1 : ++d->read_lock;
+		osp_spin_unlock(&d->mutex);
+		wake_up_all(&d->blockq);
+	  */
 		eprintk("Attempting to try acquire again\n");
 		r = -ENOTTY;
 
@@ -436,6 +459,8 @@ static int setup_device(osprd_info_t *d, int which)
 		return -1;
 	blk_queue_hardsect_size(d->queue, SECTOR_SIZE);
 	d->queue->queuedata = d;
+	d->read_lock = 0;
+	d->write_lock =0;
 
 	/* The gendisk structure. */
 	if (!(d->gd = alloc_disk(1)))
