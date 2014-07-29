@@ -134,7 +134,6 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
   else {	//WRITE request
     memcpy(blk, req->buffer, blk_size);
   }
-
   end_request(req, 1);
 }
 
@@ -162,14 +161,18 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
     // EXERCISE: If the user closes a ramdisk file that holds
     // a lock, release the lock.  Also wake up blocked processes
     // as appropriate.
+
+		unsigned check = 0;
+		
+    osp_spin_lock(&(d->mutex));
     if(filp->f_flags & F_OSPRD_LOCKED) {
-      osp_spin_lock(&(d->mutex));
       filp->f_flags &= ~F_OSPRD_LOCKED;
       (filp_writable) ? --d->write_lock : --d->read_lock;
-      osp_spin_unlock(&(d->mutex));
-      wake_up_all(&d->blockq);
     }
-		 
+		osp_spin_unlock(&(d->mutex));
+		
+		if (check)
+    	wake_up_interruptible(&d->blockq);
     // Your code here.
 
     // This line avoids compiler warnings; you may remove it.
@@ -241,11 +244,36 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
     // be protected by a spinlock; which ones?)
 
     // Your code here (instead of the next two lines).
-    eprintk("Attempting to acquire\n");
-    osp_spin_lock(&d->mutex);
+
+		osp_spin_lock(&d->mutex);
     unsigned local_ticket = d->ticket_head;
+		if (filp->f_flags & F_OSPRD_LOCKED) {
+			r=-ERESTARTSYS;
+		} else {
+			filp->f_flags |= F_OSPRD_LOCKED;
+			d->ticket_tail++;
+			(filp_writable) ? d->write_lock=1 : ++d->read_lock;		
+		}
+		osp_spin_unlock(&d->mutex);
+
+		if (r == -ERESTARTSYS) {
+			if (filp_writable)
+				wait_event_interruptible(d->blockq, d->ticket_tail==local_ticket && 
+					!(d->write_lock || d->read_lock));
+			else
+				wait_event_interruptible(d->blockq, d->ticket_tail==local_ticket &&
+					!(d->write_lock));
+		}
+		else {
+			wake_up_interruptible(&d->blockq);
+		}
+
+	/*	
+    osp_spin_lock(&d->mutex);
+		if(filp->f_flags & F_OSPRD_LOCKED)
+		{
     d->ticket_head++;
-    osp_spin_unlock(&d->mutex);
+    //osp_spin_unlock(&d->mutex);
 
     wait_event_interruptible(d->blockq, d->ticket_tail==local_ticket);
     if (filp_writable)
@@ -253,20 +281,24 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
     else
       wait_event_interruptible(d->blockq, (!d->write_lock));
     //eprintk("Cannot acquire lock\n");
-    /*
-      wait_event_interruptible(d->blockq, d->ticket_tail==local_ticket);
-      r = -ERESTARTSYS;
+    
+      //wait_event_interruptible(d->blockq, d->ticket_tail==local_ticket);
+      //r = -ERESTARTSYS;
       // NOTE: Need to uncomment these lines but fix wait forever
-      */
-
-
-    osp_spin_lock(&d->mutex);
+      
+			r = -ERESTARTSYS;
+		}
+		else
+		{
+    //osp_spin_lock(&d->mutex);
     filp->f_flags |= F_OSPRD_LOCKED;
     (filp_writable) ? d->write_lock=1 : ++d->read_lock;
     d->ticket_tail++;
+    wake_up_interruptible(&d->blockq);
+		}
     osp_spin_unlock(&d->mutex);
-    wake_up_all(&d->blockq);
 
+		*/
   } else if (cmd == OSPRDIOCTRYACQUIRE) {
 
     // EXERCISE: ATTEMPT to lock the ramdisk.
@@ -277,7 +309,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
     // Otherwise, if we can grant the lock request, return 0.
     // Your code here (instead of the next two lines).
     eprintk("Trying to acquire\n");
-    if(filp->f_flags & F_OSPRD_LOCKED || d->write_lock || d->read_lock && filp_writable) 
+    if(filp->f_flags & F_OSPRD_LOCKED || d->write_lock || (d->read_lock && filp_writable))
       return -EBUSY;
     else {
       osp_spin_lock(&d->mutex);
@@ -286,8 +318,6 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
       osp_spin_unlock(&d->mutex);
       return 0;
     }
-    eprintk("Attempting to try acquire again\n");
-    r = -ENOTTY;
 
   } else if (cmd == OSPRDIOCRELEASE) {
 
